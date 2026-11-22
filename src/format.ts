@@ -34,3 +34,9 @@ export function rate(bps: number) {
   if (bps < 1e6) return `${(bps / 1e3).toFixed(bps < 1e4 ? 1 : 0)} kB/s`;
   return `${(bps / 1e6).toFixed(1)} MB/s`;
 }
+
+/** requests per minute → "0/min", "0.4/min", "37/min" */
+export const perMin = (v: number) => (v === 0 ? '0/min' : v < 10 ? `${v.toFixed(1)}/min` : `${num(v)}/min`);
+
+/** response time → "<1 ms", "84 ms", "1.2 s" */
+export const latency = (ms: number) => (ms < 1 ? '<1 ms' : ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(1)} s`);

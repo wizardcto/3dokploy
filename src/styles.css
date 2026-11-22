@@ -1628,6 +1628,59 @@ a:focus-visible {
   display: none;
 }
 
+/* ---- domains (header list + inspector card) ------------------------------------------ */
+
+.menu-note {
+  margin: 0;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.menu-group {
+  margin: 0;
+  padding: 12px 12px 6px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.row.is-static {
+  cursor: default;
+}
+.row.is-static:hover {
+  background: none;
+}
+.domain-health {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.domain-card .mini-list li {
+  flex-wrap: wrap;
+}
+.domain-card .mini-list li:first-child {
+  border-top: 0;
+}
+/* Beats `.mini-list li .mono` (no fixed width, neon like other domain links). */
+.domain-card .mini-list .domain {
+  flex: 1 1 0;
+  min-width: 0;
+  color: var(--neon);
+}
+.domain-stats {
+  flex-basis: 100%;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding-left: 16px;
+}
+.domain-spark {
+  flex-basis: 100%;
+  padding-left: 16px;
+}
+.domain-spark .sparkline {
+  height: 28px;
+}
+.domain-card > .muted {
+  margin: 6px 0 0;
+}
+
 /* ---- compact pipeline --------------------------------------------------------------- */
 
 .pipeline {

@@ -57,6 +57,37 @@ export interface Service {
   containers?: number;
 }
 
+/** Traefik traffic of one host over the last few minutes (from Dokploy's request log). */
+export interface DomainTraffic {
+  /** Requests per minute. */
+  rpm: number;
+  /** Requests in the window the stats cover. */
+  requests: number;
+  /** Shares (0..1) of 4xx and 5xx responses. */
+  clientErr: number;
+  serverErr: number;
+  /** 95th percentile response time, ms. */
+  p95Ms: number;
+  /** Bytes sent per minute. */
+  bytesPerMin: number;
+  /** Epoch ms of the newest request seen for this host. */
+  lastAt?: number;
+  /** Last requests-per-minute samples, oldest first. */
+  hist: number[];
+}
+
+/** A host Traefik routes: a Dokploy domain, or (no serviceId) a host requests arrive for anyway. */
+export interface Domain {
+  id: string;
+  host: string;
+  /** Path prefix when it isn't "/". */
+  path?: string;
+  https?: boolean;
+  serviceId?: string;
+  /** Undefined while the request log is unavailable (request tracking off, or an older Dokploy). */
+  traffic?: DomainTraffic;
+}
+
 export const STAGES = ['Clone', 'Build', 'Push', 'Start', 'Health'] as const;
 export type StageName = (typeof STAGES)[number];
 export type StageStatus = 'queued' | 'running' | 'done' | 'failed';
@@ -104,6 +135,7 @@ export interface World {
   projects: Project[];
   environments: Environment[];
   services: Service[];
+  domains: Domain[];
   deployments: Deployment[];
   alerts: Alert[];
 }
@@ -115,7 +147,7 @@ export type WorldPatch = { [K in Collection]?: World[K] } & {
   removed?: Partial<Record<Collection, string[]>>;
 };
 
-export const COLLECTIONS: readonly Collection[] = ['servers', 'projects', 'environments', 'services', 'deployments', 'alerts'];
+export const COLLECTIONS: readonly Collection[] = ['servers', 'projects', 'environments', 'services', 'domains', 'deployments', 'alerts'];
 
 export type SourceState = 'connecting' | 'live' | 'error';
 

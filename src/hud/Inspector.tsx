@@ -5,7 +5,8 @@ import { ago, duration, mb, pct, rate } from '../format';
 import { latestDeploys, useStore } from '../store';
 import { TRIGGER_LABEL } from '../theme';
 import { DeployPill, KindBadge, Sparkline, StatusPill } from './bits';
-import { CloseIcon, ExternalIcon } from './icons';
+import { DomainCard } from './Domains';
+import { CloseIcon } from './icons';
 
 export function Inspector() {
   const id = useStore((s) => s.selectedId);
@@ -44,17 +45,11 @@ export function Inspector() {
 
       <div className="insp-row">
         <StatusPill status={svc.status} />
-        {svc.domain ? (
-          <a className="domain mono" href={`https://${svc.domain}`} target="_blank" rel="noreferrer noopener">
-            {svc.domain}
-            <ExternalIcon />
-          </a>
-        ) : (
-          <span className="muted small">No public domain</span>
-        )}
       </div>
 
       {svc.description && <p className="insp-desc">{svc.description}</p>}
+
+      <DomainCard serviceId={svc.id} fallback={svc.domain} />
 
       <section className="insp-card">
         <div className="insp-card-head">

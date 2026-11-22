@@ -4,8 +4,9 @@
  *
  *   every tick (5 s)   projects + statuses, logs of running deploys
  *   every 2nd tick     deployment feed, container stats (CPU / memory / network)
+ *   every 4th tick     Traefik request log → per-domain traffic
  *   every 6th tick     compose stacks' container lists
- *   every 60th tick    domains + sources (per-service `.one` calls), host resources
+ *   every 60th tick    domains + sources (per-service `.one` calls, overview.domains), host resources
  *
  * A service with several containers (a compose stack, or replicas) is split into one node per
  * container. The first keeps the service id, so deploys and alerts stay attached to it.
@@ -14,7 +15,7 @@
  * publishes only what changed.
  */
 import { diffWorld } from '../diff';
-import type { Alert, Deployment, Server, Service, ServiceStatus, SourceStatus, World } from '../types';
+import type { Alert, Deployment, Domain, DomainTraffic, Server, Service, ServiceStatus, SourceStatus, World } from '../types';
 import {
   UpstreamError,
   belongsTo,
@@ -22,8 +23,10 @@ import {
   fetchContainerStats,
   fetchDeployments,
   fetchDetails,
+  fetchDomains,
   fetchHost,
   fetchLogLines,
+  fetchRequests,
   fetchServiceDeployments,
   fetchStructure,
   inferStages,
@@ -32,9 +35,11 @@ import {
   type ComposeContainer,
   type ContainerStat,
   type Details,
+  type DomainConfig,
   type Structure,
   type Transport,
 } from './api';
+import { assign, coverageStart, strayHost, trafficOf } from './traffic';
 
 const HIST = 30;
 const KEEP_DEPLOYS = 80;
@@ -116,6 +121,9 @@ export class Collector {
   private netHistory = new Map<string, NetSample[]>();
   private logs = new Map<string, { lines: string[]; final: boolean }>();
   private host: Partial<Server> & { hostname?: string } = {};
+  private domainConfigs: DomainConfig[] = [];
+  /** Per domain id (or stray host id); empty until the request log has been read once. */
+  private traffic = new Map<string, DomainTraffic>();
   private errorSince = new Map<string, number>();
   private resolved = new Map<string, Alert>();
   private inflight = new Map<string, Promise<void>>();
@@ -133,7 +141,7 @@ export class Collector {
     return this.once('bootstrap', async () => {
       await Promise.allSettled([this.refreshStructure(), this.refreshDeployments()]);
       this.commit();
-      void Promise.allSettled([this.refreshContainers().then(() => this.refreshStats()), this.refreshDetails(), this.refreshHost(), this.refreshRecentFailureLogs()]).then(() =>
+      void Promise.allSettled([this.refreshContainers().then(() => this.refreshStats()), this.refreshDetails(), this.refreshDomains().then(() => this.refreshRequests()), this.refreshHost(), this.refreshRecentFailureLogs()]).then(() =>
         this.commit(),
       );
     });
@@ -146,6 +154,7 @@ export class Collector {
       // The container list (`docker ps` on the Dokploy host, per stack and per open tab) only changes
       // on deploys: refresh it every 30 s; the stats in between use the cached list.
       if (n % 2 === 0) jobs.push(this.refreshDeployments(), (n % 6 === 0 ? this.refreshContainers() : Promise.resolve()).then(() => this.refreshStats()));
+      if (n % 4 === 0) jobs.push(n % 60 === 0 ? this.refreshDomains().then(() => this.refreshRequests()) : this.refreshRequests());
       if (n % 60 === 0) jobs.push(this.refreshDetails());
       if (n % 120 === 0) jobs.push(this.refreshHost());
       await Promise.allSettled(jobs);
@@ -296,6 +305,37 @@ export class Collector {
     });
   }
 
+  private async refreshDomains() {
+    try {
+      this.domainConfigs = await fetchDomains(this.t);
+    } catch (e) {
+      this.warn('domains', e);
+    }
+  }
+
+  /** Re-reads the whole (short) request log; a failed read keeps the last stats. */
+  private async refreshRequests() {
+    let entries;
+    try {
+      entries = await fetchRequests(this.t);
+    } catch (e) {
+      return this.warn('requests', e);
+    }
+    const now = Date.now();
+    const since = coverageStart(entries, now);
+    const apps = new Map(this.structure?.services.map((s) => [s.id, s.appName]));
+    const groups = assign(entries, this.domainConfigs, (id) => apps.get(id));
+    const next = new Map<string, DomainTraffic>();
+    for (const d of this.domainConfigs) next.set(d.id, trafficOf(groups.get(d.id) ?? [], since, now, this.traffic.get(d.id)?.hist));
+    // Hosts no domain claims: only while they get requests.
+    for (const [id, list] of groups) {
+      if (next.has(id)) continue;
+      const t = trafficOf(list, since, now, this.traffic.get(id)?.hist);
+      if (t.requests) next.set(id, t);
+    }
+    this.traffic = next;
+  }
+
   private async refreshHost() {
     try {
       this.host = await fetchHost(this.t);
@@ -335,12 +375,15 @@ export class Collector {
       if (d.status === 'success' && at > (lastDeploy.get(d.serviceId) ?? 0)) lastDeploy.set(d.serviceId, at);
     }
 
+    const firstDomain = new Map<string, string>();
+    for (const d of this.domainConfigs) if (!firstDomain.has(d.serviceId)) firstDomain.set(d.serviceId, d.host);
+
     const services: Service[] = s.services.flatMap((svc) => {
       const det = this.details.get(svc.id);
       const m = this.metrics.get(svc.id);
       const node: Service = {
         ...svc,
-        domain: det?.domain,
+        domain: firstDomain.get(svc.id) ?? det?.domain,
         source: det?.source,
         replicas: det?.replicas ?? svc.replicas,
         memLimitMb: det?.memLimitMb ?? m?.memLimitMb ?? 0,
@@ -383,11 +426,22 @@ export class Collector {
         : sv,
     );
 
+    const domains: Domain[] = [
+      ...this.domainConfigs
+        .filter((d) => known.has(d.serviceId))
+        .map((d) => ({ id: d.id, host: d.host, path: d.path, https: d.https, serviceId: d.serviceId, traffic: this.traffic.get(d.id) })),
+      ...[...this.traffic].flatMap(([id, traffic]) => {
+        const host = strayHost(id);
+        return host ? [{ id, host, traffic }] : [];
+      }),
+    ];
+
     return {
       servers,
       projects: s.projects,
       environments: s.environments,
       services,
+      domains,
       deployments,
       alerts: this.alerts(services, deployments),
     };

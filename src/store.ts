@@ -10,6 +10,7 @@ import {
   isActiveDeploy,
   type Alert,
   type Deployment,
+  type Domain,
   type Environment,
   type Project,
   type Server,
@@ -21,7 +22,7 @@ import {
 import { duration } from './format';
 import { computeLayout, structureKey, type Layout } from './layout';
 
-export type MenuTab = 'activity' | 'deploys' | 'alerts' | 'services' | 'projects';
+export type MenuTab = 'activity' | 'deploys' | 'alerts' | 'services' | 'domains' | 'projects';
 export type CameraCommand = { kind: 'zoomIn' | 'zoomOut' | 'reset' | 'pan'; n: number; dx?: number; dz?: number };
 export type Focus = { kind: 'service' | 'project'; id: string; n: number };
 export type Tone = 'ok' | 'info' | 'warn' | 'crit' | 'muted';
@@ -54,6 +55,7 @@ interface WorldSlice {
   projects: Rec<Project>;
   environments: Rec<Environment>;
   services: Rec<Service>;
+  domains: Rec<Domain>;
   deployments: Rec<Deployment>;
   alerts: Rec<Alert>;
 }
@@ -160,6 +162,7 @@ export const useStore = create<State>()((set, get) => ({
   projects: {},
   environments: {},
   services: {},
+  domains: {},
   deployments: {},
   alerts: {},
   ready: false,
@@ -202,6 +205,7 @@ export const useStore = create<State>()((set, get) => ({
       projects: {},
       environments: {},
       services: {},
+      domains: {},
       deployments: {},
       alerts: {},
       layout: null,
@@ -226,6 +230,7 @@ export const useStore = create<State>()((set, get) => ({
             projects: byId(world.projects),
             environments: byId(world.environments),
             services: byId(world.services),
+            domains: byId(world.domains),
             deployments: byId(world.deployments),
             alerts: byId(world.alerts),
           };
@@ -336,6 +341,7 @@ function applyPatch(s: State, p: WorldPatch): Partial<State> {
     projects: merge(s.projects, p.projects, rm.projects),
     environments: merge(s.environments, p.environments, rm.environments),
     services: merge(s.services, p.services, rm.services),
+    domains: merge(s.domains, p.domains, rm.domains),
     deployments: merge(s.deployments, p.deployments, rm.deployments),
     alerts: merge(s.alerts, p.alerts, rm.alerts),
   };

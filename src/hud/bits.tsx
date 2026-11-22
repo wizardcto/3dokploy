@@ -30,8 +30,8 @@ export function KindBadge({ kind }: { kind: ServiceKind }) {
   );
 }
 
-/** CPU history: horizontal grid, filled area, line, and a dot on the latest sample. */
-export function Sparkline({ values, width = 300, height = 64 }: { values: number[]; width?: number; height?: number }) {
+/** History of a 0..1 value (CPU by default): horizontal grid, filled area, line, and a dot on the latest sample. */
+export function Sparkline({ values, width = 300, height = 64, label = 'CPU history' }: { values: number[]; width?: number; height?: number; label?: string }) {
   const pad = 3;
   const n = Math.max(values.length, 2);
   const x = (i: number) => pad + (i / (n - 1)) * (width - pad * 2);
@@ -43,7 +43,7 @@ export function Sparkline({ values, width = 300, height = 64 }: { values: number
 
   // The SVG stretches to the container; the end dot is HTML so it stays round.
   return (
-    <div className="sparkline" role="img" aria-label="CPU history">
+    <div className="sparkline" role="img" aria-label={label}>
       <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none">
         {[0.25, 0.5, 0.75].map((g) => (
           <line key={g} x1={pad} x2={width - pad} y1={y(g)} y2={y(g)} className="spark-grid" vectorEffect="non-scaling-stroke" />

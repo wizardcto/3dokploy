@@ -14,7 +14,7 @@ import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { Hono } from 'hono';
 import { basicAuth } from 'hono/basic-auth';
-import { forward, loadTarget } from './dokploy.ts';
+import { forward, loadTarget, requestLog } from './dokploy.ts';
 
 const PORT = Number(process.env.PORT ?? 3000);
 const STATIC_DIR = process.env.STATIC_DIR ?? 'dist';
@@ -55,6 +55,7 @@ app.use('*', async (c, next) => {
   if (!c.req.path.startsWith('/api/')) c.header('content-security-policy', CSP);
 });
 
+app.get('/api/settings.readStatsLogs', requestLog(target));
 app.get('/api/:procedure', forward(target));
 app.all('/api/*', (c) => c.json({ error: 'Not found' }, 404));
 

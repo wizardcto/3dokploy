@@ -1,5 +1,5 @@
 /**
- * Header menus: Live / Deploys / Alerts / Nodes / Projects. Each header button opens its list
+ * Header menus: Live / Deploys / Alerts / Nodes / Domains / Projects. Each header button opens its list
  * as a dropdown right under it. Nodes carries the search box (it also dims the scene).
  */
 import { useEffect, useMemo, useRef } from 'react';
@@ -8,6 +8,7 @@ import { ago, clock, mb, pct } from '../format';
 import { matchesSearch, useStore, type MenuTab } from '../store';
 import { KIND_LABEL, TRIGGER_LABEL } from '../theme';
 import { DeployPill, StatusDot } from './bits';
+import { DomainList } from './Domains';
 import { SearchIcon } from './icons';
 
 export interface MenuItem {
@@ -23,6 +24,7 @@ export function useMenuItems(): MenuItem[] {
   const alerts = useStore((s) => s.alerts);
   const services = useStore((s) => s.services);
   const projects = useStore((s) => s.projects);
+  const domains = useStore((s) => s.domains);
   const events = useStore((s) => s.events);
   const seenAt = useStore((s) => s.seenEventsAt);
 
@@ -35,9 +37,10 @@ export function useMenuItems(): MenuItem[] {
       { id: 'deploys' as const, label: 'Deploys', count: active, tone: active ? ('info' as const) : undefined },
       { id: 'alerts' as const, label: 'Alerts', count: open, tone: open ? ('crit' as const) : undefined },
       { id: 'services' as const, label: 'Nodes', count: Object.keys(services).length },
+      { id: 'domains' as const, label: 'Domains', count: Object.values(domains).filter((d) => d.serviceId).length },
       { id: 'projects' as const, label: 'Projects', count: Object.keys(projects).length },
     ];
-  }, [deployments, alerts, services, projects, events, seenAt]);
+  }, [deployments, alerts, services, projects, domains, events, seenAt]);
 }
 
 /** Pick an item: select a node (or open a project) and close the menu. */
@@ -67,6 +70,8 @@ export function MenuContent({ tab }: { tab: MenuTab }) {
       return <AlertList />;
     case 'services':
       return <NodeList />;
+    case 'domains':
+      return <DomainList />;
     case 'projects':
       return <ProjectList />;
   }

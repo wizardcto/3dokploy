@@ -8,6 +8,7 @@
  *
  * What it guarantees:
  *  - only an allowlist of read-only GET endpoints is forwarded: nothing can be changed through it
+ *  - the Traefik request log (see `requestLog`) is reduced to host, status, timing and size
  *  - secrets in responses (env vars, passwords, tokens…) are removed before they reach the browser
  *  - the key never leaves this process
  */
@@ -62,6 +63,7 @@ const READ_ONLY = new Set([
   'mongo.one',
   'redis.one',
   'libsql.one',
+  'overview.domains',
 ]);
 
 /** Field names that may hold secrets anywhere in a response. 3Dokploy never needs them. */
@@ -87,6 +89,45 @@ function describe(e: unknown, url: URL) {
   return `Can't reach ${url.host}${code ? ` (${code})` : ''}.`;
 }
 
+type Upstream = { ok: true; data: unknown } | { ok: false; status: 401 | 502; error: string };
+
+/** One GET against Dokploy with the key added; failures come back as a message that points at the fix. */
+async function upstream(target: { url: string; key: string }, url: URL, procedure: string): Promise<Upstream> {
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      headers: { 'x-api-key': target.key, accept: 'application/json', 'user-agent': '3dokploy' },
+      redirect: 'manual',
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+  } catch (e) {
+    return { ok: false, status: 502, error: describe(e, url) };
+  }
+
+  if (res.status >= 300 && res.status < 400) {
+    const to = res.headers.get('location');
+    return { ok: false, status: 502, error: `Dokploy redirected to ${to ?? 'another address'}. Set DOKPLOY_URL to that address.` };
+  }
+  if (res.status === 401 || res.status === 403) return { ok: false, status: 401, error: 'Dokploy rejected DOKPLOY_API_KEY.' };
+  if (!res.headers.get('content-type')?.includes('json')) {
+    return { ok: false, status: 502, error: `DOKPLOY_URL doesn't answer like a Dokploy API (HTTP ${res.status}).` };
+  }
+
+  let data: unknown;
+  try {
+    data = await res.json();
+  } catch {
+    return { ok: false, status: 502, error: 'Dokploy sent malformed JSON.' };
+  }
+  if (!res.ok) {
+    // REST errors carry `message`; tRPC errors carry `error.json.message`.
+    const body = data as { message?: string; error?: { json?: { message?: string } } } | null;
+    const message = body?.message ?? body?.error?.json?.message;
+    return { ok: false, status: 502, error: `Dokploy ${procedure} → ${res.status}${message ? `: ${message}` : ''}` };
+  }
+  return { ok: true, data };
+}
+
 export function forward(target: { url: string; key: string }) {
   return async (c: Context) => {
     const procedure = c.req.param('procedure') ?? '';
@@ -95,38 +136,48 @@ export function forward(target: { url: string; key: string }) {
     }
     const url = new URL(`${target.url}/api/${procedure}`);
     url.search = new URL(c.req.url).search;
-
-    let res: Response;
-    try {
-      res = await fetch(url, {
-        headers: { 'x-api-key': target.key, accept: 'application/json', 'user-agent': '3dokploy' },
-        redirect: 'manual',
-        signal: AbortSignal.timeout(TIMEOUT_MS),
-      });
-    } catch (e) {
-      return c.json({ error: describe(e, url) }, 502);
-    }
-
-    if (res.status >= 300 && res.status < 400) {
-      const to = res.headers.get('location');
-      return c.json({ error: `Dokploy redirected to ${to ?? 'another address'}. Set DOKPLOY_URL to that address.` }, 502);
-    }
-    if (res.status === 401 || res.status === 403) return c.json({ error: 'Dokploy rejected DOKPLOY_API_KEY.' }, 401);
-    if (!res.headers.get('content-type')?.includes('json')) {
-      return c.json({ error: `DOKPLOY_URL doesn't answer like a Dokploy API (HTTP ${res.status}).` }, 502);
-    }
-
-    let data: unknown;
-    try {
-      data = await res.json();
-    } catch {
-      return c.json({ error: 'Dokploy sent malformed JSON.' }, 502);
-    }
-    if (!res.ok) {
-      const message = (data as { message?: string } | null)?.message;
-      return c.json({ error: `Dokploy ${procedure} → ${res.status}${message ? `: ${message}` : ''}` }, 502);
-    }
+    const r = await upstream(target, url, procedure);
+    if (!r.ok) return c.json({ error: r.error }, r.status);
     c.header('cache-control', 'no-store');
-    return c.json(redact(data));
+    return c.json(redact(r.data));
+  };
+}
+
+/** Entries Dokploy keeps of Traefik's access log (it only reads the newest few hundred anyway). */
+const REQUEST_LOG_SIZE = 1000;
+
+/**
+ * Traefik's access log, as Dokploy's "Requests" page reads it. Dokploy only offers this on its
+ * internal tRPC route, not on the REST API, so it gets its own handler: the query is fixed here
+ * (the browser can't pass one), and each entry is cut down to what 3Dokploy shows. Client IPs,
+ * paths, user agents and headers never leave this process.
+ */
+export function requestLog(target: { url: string; key: string }) {
+  return async (c: Context) => {
+    const procedure = 'settings.readStatsLogs';
+    const url = new URL(`${target.url}/api/trpc/${procedure}`);
+    const input = { page: { pageIndex: 0, pageSize: REQUEST_LOG_SIZE }, sort: { id: 'StartUTC', desc: true }, search: '', status: [] };
+    url.searchParams.set('input', JSON.stringify({ json: input }));
+    const r = await upstream(target, url, procedure);
+    if (!r.ok) return c.json({ error: r.error }, r.status);
+
+    const rows = (r.data as { result?: { data?: { json?: { data?: unknown } } } })?.result?.data?.json?.data;
+    if (!Array.isArray(rows)) return c.json({ error: `Dokploy ${procedure} answered in an unknown format.` }, 502);
+    const entries = rows.flatMap((e: Record<string, unknown>) => {
+      const at = typeof e.StartUTC === 'string' ? Date.parse(e.StartUTC) : NaN;
+      if (!Number.isFinite(at) || typeof e.RequestHost !== 'string' || !e.RequestHost) return [];
+      return [
+        {
+          at,
+          host: e.RequestHost.toLowerCase(),
+          status: Number(e.DownstreamStatus) || 0,
+          ms: (Number(e.Duration) || 0) / 1e6,
+          bytes: Number(e.DownstreamContentSize) || 0,
+          router: typeof e.RouterName === 'string' ? e.RouterName : undefined,
+        },
+      ];
+    });
+    c.header('cache-control', 'no-store');
+    return c.json(entries);
   };
 }

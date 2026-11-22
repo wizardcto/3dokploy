@@ -10,6 +10,8 @@
  *   docker.getContainersByAppNameMatch → a compose stack's containers (by compose project label)
  *   swarm.getNodes / getNodeInfo      → host CPU / memory
  *   application.one, compose.one, <db>.one → domains, source, replicas, limits
+ *   overview.domains                  → every domain with its service
+ *   settings.readStatsLogs            → Traefik's access log (tRPC only; this app's server trims it)
  *
  * `project.all` only lists ids (and for databases nothing else), so it is followed by
  * `project.one` per project. Projects from versions without environments are treated as a
@@ -236,6 +238,42 @@ export async function fetchDetails(t: Transport, kind: ServiceKind, id: string):
     memLimitMb: Number.isFinite(memBytes) && memBytes > 0 ? Math.round(memBytes / 1048576) : undefined,
   };
 }
+
+// ---- domains + Traefik requests --------------------------------------------------------------
+
+export interface DomainConfig {
+  id: string;
+  host: string;
+  path?: string;
+  https: boolean;
+  serviceId: string;
+}
+
+/** Every enabled domain, across all services (Dokploy ≥ 0.29; older versions reject the call). */
+export async function fetchDomains(t: Transport): Promise<DomainConfig[]> {
+  const raw = await get<Raw[]>(t, '/api/overview.domains');
+  return raw.flatMap((d) => {
+    const id = str(d.domainId);
+    const host = str(d.host)?.toLowerCase();
+    const serviceId = str(d.serviceOwnerId);
+    if (!id || !host || !serviceId || d.enabled === false) return [];
+    const path = str(d.path);
+    return [{ id, host, path: path && path !== '/' ? path : undefined, https: d.https === true, serviceId }];
+  });
+}
+
+/** One request from Traefik's access log, as this app's server passes it on (no client data). */
+export interface RequestEntry {
+  at: number;
+  host: string;
+  status: number;
+  ms: number;
+  bytes: number;
+  router?: string;
+}
+
+/** Newest requests first. Fails when request tracking is off in Dokploy, or the version lacks it. */
+export const fetchRequests = (t: Transport) => get<RequestEntry[]>(t, '/api/settings.readStatsLogs', 20_000);
 
 // ---- host ------------------------------------------------------------------------------------
 
